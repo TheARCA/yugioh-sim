@@ -170,10 +170,12 @@ class GameRenderer {
     }
   }
 
+  // render.js
+  // Replace your endFrame method in render.js
   endFrame() {
     this.ctx.restore(); // Undo the shake translation so scanlines stay put
 
-    // Scanlines
+    // Static Scanlines
     this.ctx.fillStyle = "rgba(0, 0, 0, 0.4)";
     for (let i = 0; i < this.canvas.height; i += 4) {
       this.ctx.fillRect(0, i, this.canvas.width, 2);

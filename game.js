@@ -1,5 +1,61 @@
 import DuelEngine from "./engine.js";
 
+class RetroAudio {
+  constructor() {
+    this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    this.enabled = false;
+
+    // Browsers block audio until the user clicks the screen once
+    window.addEventListener(
+      "click",
+      () => {
+        if (!this.enabled) {
+          this.ctx.resume();
+          this.enabled = true;
+        }
+      },
+      { once: true },
+    );
+  }
+
+  playSlam() {
+    if (!this.enabled) return;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+
+    // A low, heavy, rapidly dropping square wave
+    osc.type = "square";
+    osc.frequency.setValueAtTime(150, this.ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(10, this.ctx.currentTime + 0.3);
+
+    gain.gain.setValueAtTime(0.4, this.ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.3);
+
+    osc.start();
+    osc.stop(this.ctx.currentTime + 0.3);
+  }
+
+  playBlip() {
+    if (!this.enabled) return;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+
+    // A short, high-pitched menu blip
+    osc.type = "square";
+    osc.frequency.setValueAtTime(600, this.ctx.currentTime);
+
+    gain.gain.setValueAtTime(0.03, this.ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.05);
+
+    osc.start();
+    osc.stop(this.ctx.currentTime + 0.05);
+  }
+}
+
 class Particle {
   constructor(x, y) {
     this.x = x;
@@ -27,7 +83,6 @@ class Particle {
 }
 
 class Card {
-  // NEW: Added Level property
   constructor(id, name, type, atk, def, desc, level = 0) {
     this.id = id;
     this.name = name;
@@ -36,7 +91,7 @@ class Card {
     this.def = def;
     this.desc = desc;
     this.level = level;
-    this.location = "HAND";
+    this.location = "DECK"; // Default to deck now
     this.drawY = 0;
   }
 
@@ -57,25 +112,7 @@ class Card {
     ctx.lineWidth = 1;
     ctx.strokeRect(x + artPad, currentY + artPad, artSize, artSize);
 
-    // --- UX UPGRADE: Draw Level Stars ---
-    if (this.type === "Monster" && this.level > 0) {
-      const starSize = Math.max(2, Math.floor(size / 25));
-      const starSpacing = 3;
-      const totalStarWidth =
-        this.level * starSize + (this.level - 1) * starSpacing;
-      let starX = x + size - artPad - totalStarWidth - 2; // Right aligned
-      let starY = currentY + artPad + 4; // Inside top of art box
-
-      ctx.fillStyle = "#FFFFFF";
-      for (let i = 0; i < this.level; i++) {
-        ctx.fillRect(
-          starX + i * (starSize + starSpacing),
-          starY,
-          starSize,
-          starSize,
-        );
-      }
-    }
+    // DELETED: Level Stars Logic
 
     ctx.beginPath();
     ctx.moveTo(x + artPad, currentY + artPad);
@@ -118,15 +155,27 @@ class Zone {
     this.id = id;
     this.card = null;
   }
-  draw(ctx) {
+
+  // NEW: Added isHighlighted and time parameters
+  draw(ctx, isHighlighted = false, time = 0) {
     if (this.card) {
       this.card.draw(ctx, this.x, this.y, this.size);
       return;
     }
-    ctx.shadowBlur = 8;
+
+    // --- UX UPGRADE: Pulsing Highlight ---
+    if (isHighlighted) {
+      // Create a smooth pulsing effect using a sine wave based on time
+      const pulse = (Math.sin(time * 0.008) + 1) / 2;
+      ctx.fillStyle = `rgba(255, 255, 255, ${0.1 + pulse * 0.2})`;
+      ctx.fillRect(this.x, this.y, this.size, this.size);
+    }
+
+    // Thicker border and bigger glow if highlighted
+    ctx.shadowBlur = isHighlighted ? 15 : 8;
     ctx.shadowColor = "#FFFFFF";
     ctx.strokeStyle = "#FFFFFF";
-    ctx.lineWidth = 2;
+    ctx.lineWidth = isHighlighted ? 4 : 2;
     ctx.strokeRect(this.x, this.y, this.size, this.size);
     ctx.shadowBlur = 0;
 
@@ -245,7 +294,7 @@ class Board {
     );
   }
 
-  draw(ctx) {
+  draw(ctx, selectedCard, time) {
     if (this.matBounds && ctx.roundRect) {
       ctx.fillStyle = "#000000";
       ctx.strokeStyle = "#FFFFFF";
@@ -261,7 +310,20 @@ class Board {
       ctx.fill();
       ctx.stroke();
     }
-    this.zones.forEach((zone) => zone.draw(ctx));
+
+    this.zones.forEach((zone) => {
+      let isHighlighted = false;
+      // If we are holding a card, and this zone is a P1 Monster zone, and it is empty... highlight it!
+      if (
+        selectedCard &&
+        zone.id &&
+        zone.id.startsWith("p1_m") &&
+        zone.card === null
+      ) {
+        isHighlighted = true;
+      }
+      zone.draw(ctx, isHighlighted, time);
+    });
   }
 }
 
@@ -271,23 +333,28 @@ class Game {
     this.board = new Board();
     this.engine = new DuelEngine(this.board);
 
+    // NEW: Game State
+    this.gameState = "MENU";
+
     this.selectedCard = null;
     this.menuTargetCard = null;
-    this.lastHoveredCard = null; // Changed from hoveredCard so UI persists
+    this.lastHoveredCard = null;
     this.handBounds = [];
     this.particles = [];
 
     // DOM Elements
     this.menuEl = document.getElementById("contextMenu");
     this.btnSummon = document.getElementById("btnNormalSummon");
-
-    // UI HUD Elements
     this.uiName = document.getElementById("info-name");
     this.uiStats = document.getElementById("info-stats");
     this.uiDesc = document.getElementById("info-desc");
     this.uiArtPlaceholder = document.getElementById("info-art-placeholder");
     this.uiP1LP = document.getElementById("p1-lp");
     this.uiP2LP = document.getElementById("p2-lp");
+
+    // NEW: Main Menu Elements
+    this.mainMenuEl = document.getElementById("main-menu");
+    this.btnStartDuel = document.getElementById("btn-start-duel");
 
     window.addEventListener("resize", () => this.resize());
     this.renderer.canvas.addEventListener("click", (e) => this.onClick(e));
@@ -309,15 +376,39 @@ class Game {
       }
     });
 
+    // NEW: Wire up the Main Menu Start Button
+    this.btnStartDuel.addEventListener("click", () => {
+      this.startDuel();
+    });
+
     this.resize();
     requestAnimationFrame((t) => this.loop(t));
   }
 
-  spawnImpactParticles(x, y, size) {
-    const centerX = x + size / 2;
-    const centerY = y + size / 2;
-    for (let i = 0; i < 30; i++)
-      this.particles.push(new Particle(centerX, centerY));
+  // NEW: Deck Generation & Draw Initialization
+  startDuel() {
+    // 1. Hide the menu
+    this.mainMenuEl.style.display = "none";
+    this.gameState = "DUEL";
+
+    // 2. Build a temporary deck (10 cards for testing)
+    const testDeck = [];
+    const desc =
+      "An unworthy dragon with three sharp horns sprouting from its head.";
+    for (let i = 0; i < 10; i++) {
+      testDeck.push(
+        new Card("39111158", "Tri-Horned", "Monster", 2850, 2350, desc, 8),
+      );
+    }
+
+    // 3. Load the deck into the Engine
+    this.engine.p1.deck = testDeck;
+
+    // 4. Shuffle the deck (simple random sort for now)
+    this.engine.p1.deck.sort(() => Math.random() - 0.5);
+
+    // 5. Draw the starting 5-card hand!
+    this.engine.draw(this.engine.p1, 5);
   }
 
   onMouseMove(e) {
@@ -357,6 +448,9 @@ class Game {
     if (foundCard && foundCard !== this.lastHoveredCard) {
       this.lastHoveredCard = foundCard;
 
+      // --- JUICE: Play UI Blip when hovering a new card ---
+      this.audio.playBlip();
+
       this.uiName.innerText = foundCard.name;
       this.uiDesc.innerText = foundCard.desc;
       this.uiArtPlaceholder.innerText = foundCard.name.charAt(0);
@@ -367,8 +461,6 @@ class Game {
         this.uiStats.innerText = `[${foundCard.type}]`;
       }
     }
-    // We intentionally don't clear the panel if mouse leaves a card.
-    // In YGO sims, it feels much better if the last looked-at card stays visible in the panel.
   }
 
   onRightClick(e) {
@@ -413,9 +505,13 @@ class Game {
               this.selectedCard,
               zone.id,
             );
+
             if (success) {
+              // --- JUICE: Massive Screen Shake + Flash + Explosion + Heavy Sound Effect ---
               this.renderer.triggerImpact(25, 0.9);
               this.spawnImpactParticles(zone.x, zone.y, zone.size);
+              this.audio.playSlam();
+
               this.selectedCard = null;
             }
             return;
@@ -467,14 +563,20 @@ class Game {
   }
 
   loop(time) {
-    // --- HUD DATA BINDING ---
-    // Actively pull the data from the Engine so the UI is always accurate
+    // Don't waste resources drawing the board if we are in the menu
+    if (this.gameState === "MENU") {
+      this.renderer.beginFrame(time);
+      this.renderer.endFrame(time); // Still draw the cool shader background!
+      requestAnimationFrame((t) => this.loop(t));
+      return;
+    }
+
     this.uiP1LP.innerText = `LP: ${this.engine.p1.lp}`;
     this.uiP2LP.innerText = `LP: ${this.engine.p2.lp}`;
 
     this.renderer.beginFrame(time);
 
-    this.board.draw(this.renderer.ctx);
+    this.board.draw(this.renderer.ctx, this.selectedCard, time);
 
     for (let i = this.particles.length - 1; i >= 0; i--) {
       const p = this.particles[i];
@@ -485,27 +587,14 @@ class Game {
 
     this.drawHand();
 
-    this.renderer.endFrame();
+    this.renderer.endFrame(time);
     requestAnimationFrame((t) => this.loop(t));
   }
 }
 
+// Boot up
 window.onload = () => {
   const game = new Game();
-  const description =
-    "An unworthy dragon with three sharp horns sprouting from its head.";
-
-  // Notice the "8" passed in to initialize the Level!
-  for (let i = 0; i < 3; i++) {
-    const triHorned = new Card(
-      "39111158",
-      "Tri-Horned Dragon",
-      "Monster",
-      2850,
-      2350,
-      description,
-      8,
-    );
-    game.engine.addCardToHand(game.engine.p1, triHorned);
-  }
+  // We no longer add cards directly to the hand here!
+  // It is handled by clicking "Start Duel" now.
 };

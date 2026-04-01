@@ -59,12 +59,18 @@ export default class DuelEngine {
 
   draw(player, amount) {
     for (let i = 0; i < amount; i++) {
-      const card = this.board.popFromDeck(player);
+      // 1. Pop from the top (end) of the deck array
+      const card = player.deck.pop();
+
+      // 2. Check for Deck Out win condition
       if (!card) {
-        this.triggerWin(this.getOpponent(player), "Deck Out");
+        console.log("DECK OUT!");
+        // this.triggerWin(this.getOpponent(player), "Deck Out");
         return;
       }
-      this.board.addToHand(player, card);
+
+      // 3. Move it to the hand
+      this.addCardToHand(player, card);
     }
   }
 
